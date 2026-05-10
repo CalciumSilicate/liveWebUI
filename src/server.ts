@@ -8,7 +8,7 @@ import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
 import { AppDatabase } from "./db";
 import { MediaService } from "./media";
-import { renderHtmlPage } from "./templates";
+import { escapeHtml, renderHtmlPage } from "./templates";
 import { Channel, CommentView } from "./types";
 import { createAdminToken, createViewerToken, verifyAdminToken, verifyViewerToken } from "./token";
 import {
@@ -334,6 +334,8 @@ function adminPage(): string {
         <section class="panel admin-login" id="login-panel">
           <h1>后台</h1>
           <form id="login-form" class="stack tight">
+            <label class="sr-only" for="login-password">密码</label>
+            <input class="sr-only" name="username" type="text" autocomplete="username" value="admin" tabindex="-1" aria-hidden="true" readonly />
             <input class="ui-input" id="login-password" name="password" type="password" placeholder="密码" autocomplete="current-password" />
             <button class="ui-button" type="submit">进</button>
           </form>
@@ -350,10 +352,14 @@ function adminPage(): string {
           </header>
 
           <form id="create-form" class="channel-form grid-form">
-            <input class="ui-input" name="label" type="text" placeholder="名称" maxlength="40" required />
-            <input class="ui-input" name="slug" type="text" placeholder="slug" maxlength="32" required />
-            <input class="ui-input" name="publishPassword" type="text" placeholder="推流码" maxlength="64" required />
-            <input class="ui-input" name="viewerPassword" type="text" placeholder="观看码" maxlength="64" required />
+            <label class="sr-only" for="create-label">名称</label>
+            <input class="ui-input" id="create-label" name="label" type="text" placeholder="名称" maxlength="40" required />
+            <label class="sr-only" for="create-slug">slug</label>
+            <input class="ui-input" id="create-slug" name="slug" type="text" placeholder="slug" maxlength="32" required />
+            <label class="sr-only" for="create-publish-password">推流码</label>
+            <input class="ui-input" id="create-publish-password" name="publishPassword" type="text" placeholder="推流码" maxlength="64" required />
+            <label class="sr-only" for="create-viewer-password">观看码</label>
+            <input class="ui-input" id="create-viewer-password" name="viewerPassword" type="text" placeholder="观看码" maxlength="64" required />
             <label class="switch-line">
               <input name="enabled" type="checkbox" checked />
               <span>开</span>
@@ -371,15 +377,16 @@ function adminPage(): string {
 }
 
 function watchPage(channel: Channel): string {
+  const channelLabel = escapeHtml(channel.label);
   return renderHtmlPage({
     title: channel.label,
     bodyClass: "watch-shell",
     scriptPath: "/assets/watch.js",
     body: `
-      <main class="page watch-page" data-slug="${channel.slug}" data-label="${channel.label}">
+      <main class="page watch-page" data-slug="${channel.slug}" data-label="${channelLabel}">
         <section class="video-panel">
           <header class="watch-head">
-            <h1>${channel.label}</h1>
+            <h1>${channelLabel}</h1>
             <div class="watch-meta">
               <span class="badge" id="watch-status">离线</span>
               <div class="mode-switch" id="mode-switch">
@@ -395,6 +402,8 @@ function watchPage(channel: Channel): string {
           <p class="player-note" id="player-note" hidden></p>
           <section class="access-panel panel" id="access-panel">
             <form id="access-form" class="stack tight">
+              <label class="sr-only" for="viewer-password">观看码</label>
+              <input class="sr-only" name="username" type="text" autocomplete="username" value="${channel.slug}" tabindex="-1" aria-hidden="true" readonly />
               <input class="ui-input" id="viewer-password" type="password" placeholder="观看码" autocomplete="current-password" />
               <button class="ui-button" type="submit">进入</button>
             </form>
@@ -404,10 +413,12 @@ function watchPage(channel: Channel): string {
 
         <aside class="chat-panel panel">
           <div class="chat-head">
+            <label class="sr-only" for="author-name">名字</label>
             <input class="ui-input" id="author-name" type="text" placeholder="名字" maxlength="24" />
           </div>
           <div id="comments" class="comments"></div>
           <form id="comment-form" class="comment-form">
+            <label class="sr-only" for="comment-body">评论</label>
             <textarea class="ui-textarea" id="comment-body" rows="3" maxlength="200" placeholder="评论"></textarea>
             <button class="ui-button" type="submit">发</button>
           </form>
