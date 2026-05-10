@@ -335,7 +335,7 @@ function adminPage(): string {
           <h1>后台</h1>
           <form id="login-form" class="stack tight">
             <label class="sr-only" for="login-password">密码</label>
-            <input class="sr-only" name="username" type="text" autocomplete="username" value="admin" tabindex="-1" aria-hidden="true" readonly />
+            <input name="username" type="text" autocomplete="username" value="admin" hidden />
             <input class="ui-input" id="login-password" name="password" type="password" placeholder="密码" autocomplete="current-password" />
             <button class="ui-button" type="submit">进</button>
           </form>
@@ -403,7 +403,7 @@ function watchPage(channel: Channel): string {
           <section class="access-panel panel" id="access-panel">
             <form id="access-form" class="stack tight">
               <label class="sr-only" for="viewer-password">观看码</label>
-              <input class="sr-only" name="username" type="text" autocomplete="username" value="${channel.slug}" tabindex="-1" aria-hidden="true" readonly />
+              <input name="username" type="text" autocomplete="username" value="${channel.slug}" hidden />
               <input class="ui-input" id="viewer-password" type="password" placeholder="观看码" autocomplete="current-password" />
               <button class="ui-button" type="submit">进入</button>
             </form>
