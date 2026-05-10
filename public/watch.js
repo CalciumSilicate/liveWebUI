@@ -13,6 +13,9 @@ const commentBody = document.getElementById("comment-body");
 const player = document.getElementById("player");
 const playerCover = document.getElementById("player-cover");
 const modeButtons = Array.from(document.querySelectorAll(".mode-button"));
+const commentSubmit = commentForm?.querySelector('button[type="submit"]');
+const authorPlaceholder = authorInput?.getAttribute("placeholder") || "";
+const commentPlaceholder = commentBody?.getAttribute("placeholder") || "";
 
 let viewerToken = sessionStorage.getItem(`viewer:${slug}`) || "";
 let ws = null;
@@ -50,10 +53,14 @@ function setNote(message) {
 
 function setStatus(channel) {
   const sourceOnline = Boolean(channel?.sourceOnline);
-  statusNode.textContent = sourceOnline ? "在线" : "离线";
-  statusNode.className = sourceOnline ? "badge live" : "badge off";
-  playerCover.hidden = sourceOnline;
-  playerCover.textContent = sourceOnline ? "" : "未直播";
+  if (statusNode) {
+    statusNode.textContent = sourceOnline ? "在线" : "离线";
+    statusNode.className = sourceOnline ? "badge live" : "badge off";
+  }
+  if (playerCover) {
+    playerCover.hidden = sourceOnline;
+    playerCover.textContent = sourceOnline ? "" : "未直播";
+  }
 }
 
 function updateModeButtons(channel) {
@@ -91,6 +98,62 @@ function cleanupPlayback() {
     player.load();
     player.muted = true;
   }
+}
+
+function disconnectComments() {
+  if (!ws) {
+    return;
+  }
+  const socket = ws;
+  ws = null;
+  socket.close();
+}
+
+function setCommentUiAuthorized(isAuthorized) {
+  if (commentsRoot) {
+    commentsRoot.hidden = !isAuthorized;
+    if (!isAuthorized) {
+      commentsRoot.innerHTML = "";
+    }
+  }
+
+  if (authorInput) {
+    authorInput.disabled = !isAuthorized;
+    authorInput.placeholder = isAuthorized ? authorPlaceholder : "请先输入观看码";
+  }
+  if (commentBody) {
+    commentBody.disabled = !isAuthorized;
+    commentBody.placeholder = isAuthorized ? commentPlaceholder : "请先输入观看码";
+  }
+  if (commentSubmit) {
+    commentSubmit.disabled = !isAuthorized;
+  }
+
+  commentForm?.classList.toggle("is-disabled", !isAuthorized);
+}
+
+function applyViewerAccessState(isAuthorized) {
+  if (accessPanel) {
+    accessPanel.hidden = isAuthorized;
+  }
+  setCommentUiAuthorized(isAuthorized);
+  if (!isAuthorized) {
+    updateModeButtons(null);
+    showError(commentError, "");
+  }
+}
+
+function resetViewerAccess(message = "请重新进入") {
+  sessionStorage.removeItem(`viewer:${slug}`);
+  viewerToken = "";
+  channelState = null;
+  currentMode = "";
+  disconnectComments();
+  cleanupPlayback();
+  setStatus({ sourceOnline: false });
+  updateModeButtons(null);
+  applyViewerAccessState(false);
+  showError(accessError, message);
 }
 
 function hasActivePlayback() {
@@ -343,14 +406,20 @@ function renderComment(comment) {
 }
 
 function fillComments(comments) {
+  if (!commentsRoot) {
+    return;
+  }
   commentsRoot.innerHTML = "";
-  comments.forEach((comment) => {
+  (Array.isArray(comments) ? comments : []).forEach((comment) => {
     commentsRoot.append(renderComment(comment));
   });
   commentsRoot.scrollTop = commentsRoot.scrollHeight;
 }
 
 function appendComment(comment) {
+  if (!commentsRoot) {
+    return;
+  }
   commentsRoot.append(renderComment(comment));
   commentsRoot.scrollTop = commentsRoot.scrollHeight;
 }
@@ -383,9 +452,13 @@ function connectComments() {
   if (!viewerToken || ws) return;
   const url = new URL(`/ws/comments?channel=${encodeURIComponent(slug)}&token=${encodeURIComponent(viewerToken)}`, window.location.origin);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  ws = new WebSocket(url);
+  const socket = new WebSocket(url);
+  ws = socket;
 
-  ws.addEventListener("message", (event) => {
+  socket.addEventListener("message", (event) => {
+    if (ws !== socket || !viewerToken) {
+      return;
+    }
     try {
       const payload = JSON.parse(event.data);
       if (payload.type === "comment") {
@@ -399,15 +472,17 @@ function connectComments() {
     }
   });
 
-  ws.addEventListener("close", (event) => {
-    ws = null;
-    if (event.code === 4001 || event.code === 4003) {
-      sessionStorage.removeItem(`viewer:${slug}`);
-      viewerToken = "";
-      accessPanel.hidden = false;
-      cleanupPlayback();
-      showError(accessError, "请重新进入");
+  socket.addEventListener("close", (event) => {
+    const wasActiveSocket = ws === socket;
+    if (wasActiveSocket) {
+      ws = null;
     }
+    if (!wasActiveSocket || !viewerToken) {
+      return;
+    }
+
+    const message = event.code === 4001 || event.code === 4003 ? "请重新进入" : "评论连接已断开，请重新进入";
+    resetViewerAccess(message);
   });
 }
 
@@ -434,19 +509,18 @@ async function refreshChannel() {
       connectComments();
     }
   } catch (error) {
-    sessionStorage.removeItem(`viewer:${slug}`);
-    viewerToken = "";
-    accessPanel.hidden = false;
-    cleanupPlayback();
-    setStatus({ sourceOnline: false });
-    showError(accessError, error.message);
+    resetViewerAccess(error.message);
   }
 }
 
 async function loadComments() {
   if (!viewerToken) return;
-  const comments = await api(`/api/public/channels/${slug}/comments`);
-  fillComments(comments);
+  try {
+    const comments = await api(`/api/public/channels/${slug}/comments`);
+    fillComments(comments);
+  } catch (error) {
+    resetViewerAccess(error.message);
+  }
 }
 
 accessForm?.addEventListener("submit", async (event) => {
@@ -465,7 +539,7 @@ accessForm?.addEventListener("submit", async (event) => {
     viewerToken = result.token;
     sessionStorage.setItem(`viewer:${slug}`, viewerToken);
     channelState = result.channel;
-    accessPanel.hidden = true;
+    applyViewerAccessState(true);
     setStatus(result.channel);
     updateModeButtons(result.channel);
     currentMode = resolveMode(result.channel);
@@ -474,12 +548,17 @@ accessForm?.addEventListener("submit", async (event) => {
     connectComments();
     accessForm.reset();
   } catch (error) {
+    resetViewerAccess(error.message);
     showError(accessError, error.message);
   }
 });
 
 modeButtons.forEach((button) => {
   button.addEventListener("click", () => {
+    if (!viewerToken) {
+      showError(accessError, "请先输入观看码");
+      return;
+    }
     const mode = button.dataset.mode;
     if (!mode) return;
     void activateMode(mode, { persist: true });
@@ -488,8 +567,15 @@ modeButtons.forEach((button) => {
 
 commentForm?.addEventListener("submit", (event) => {
   event.preventDefault();
+  if (!viewerToken) {
+    applyViewerAccessState(false);
+    showError(commentError, "请先输入观看码");
+    showError(accessError, "请先输入观看码");
+    return;
+  }
   if (!ws || ws.readyState !== WebSocket.OPEN) {
-    showError(commentError, "未连接");
+    const message = ws?.readyState === WebSocket.CONNECTING ? "评论连接中，请稍后" : "评论未连接，请重新进入";
+    showError(commentError, message);
     return;
   }
   const authorName = (authorInput?.value || "").trim();
@@ -507,7 +593,9 @@ commentForm?.addEventListener("submit", (event) => {
       body,
     }),
   );
-  commentBody.value = "";
+  if (commentBody) {
+    commentBody.value = "";
+  }
   showError(commentError, "");
 });
 
@@ -532,13 +620,15 @@ commentBody?.addEventListener("keydown", (event) => {
 });
 
 const savedAuthor = localStorage.getItem("live-server:author");
-if (savedAuthor) {
+if (savedAuthor && authorInput) {
   authorInput.value = savedAuthor;
 }
 
 if (viewerToken) {
-  accessPanel.hidden = true;
+  applyViewerAccessState(true);
   void refreshChannel().then(loadComments);
+} else {
+  applyViewerAccessState(false);
 }
 
 setInterval(() => {
