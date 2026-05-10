@@ -1,0 +1,48 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    container_name: live-server-app
+    environment:
+      NODE_ENV: production
+      APP_PORT: 42110
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+      MEDIA_API_URL: http://mediamtx:9997
+      MEDIA_HLS_ORIGIN: http://mediamtx:8888
+      MEDIA_RTMP_ORIGIN: rtmp://mediamtx:1935
+      MEDIA_RTSP_ORIGIN: rtsp://mediamtx:8554
+      DB_PATH: /app/data/app.db
+      FFMPEG_BIN: /usr/bin/ffmpeg
+      PUBLIC_WEBRTC_PORT: 42113
+    ports:
+      - "42110:42110"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - mediamtx
+    restart: unless-stopped
+
+  mediamtx:
+    build:
+      context: .
+      dockerfile: Dockerfile.mediamtx
+    container_name: live-server-mediamtx
+    environment:
+      MTX_WEBRTC: "yes"
+      MTX_WEBRTCADDRESS: :8889
+      MTX_WEBRTCALLOWORIGINS: "*"
+      MTX_WEBRTCLOCALUDPADDRESS: :42114
+      MTX_WEBRTCLOCALTCPADDRESS: :42115
+      MTX_WEBRTCIPSFROMINTERFACES: "no"
+      MTX_WEBRTCADDITIONALHOSTS: ${PUBLIC_WEBRTC_HOSTS:?set PUBLIC_WEBRTC_HOSTS in .env}
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    ports:
+      - "42111:1935"
+      - "42112:8888"
+      - "42113:8889"
+      - "42114:42114/udp"
+      - "42115:42115"
+    restart: unless-stopped

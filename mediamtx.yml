@@ -1,0 +1,41 @@
+logLevel: info
+
+readTimeout: 10s
+writeTimeout: 10s
+writeQueueSize: 512
+
+authMethod: http
+authHTTPAddress: http://app:42110/internal/mediamtx/auth
+authHTTPExclude:
+  - action: api
+  - action: metrics
+  - action: pprof
+
+api: true
+apiAddress: :9997
+apiAllowOrigins: ['*']
+
+rtmp: true
+rtmpAddress: :1935
+
+hls: true
+hlsAddress: :8888
+hlsAllowOrigins: ['*']
+hlsAlwaysRemux: false
+hlsVariant: fmp4
+hlsSegmentCount: 6
+hlsSegmentDuration: 2s
+hlsPartDuration: 500ms
+hlsMuxerCloseAfter: 20s
+
+webrtc: true
+webrtcAddress: :8889
+webrtcAllowOrigins: ['*']
+webrtcLocalUDPAddress: :42114
+webrtcLocalTCPAddress: :42115
+webrtcIPsFromInterfaces: false
+webrtcAdditionalHosts: []
+
+paths:
+  all:
+    source: publisher

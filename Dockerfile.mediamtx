@@ -1,0 +1,6 @@
+FROM scratch
+
+COPY vendor/mediamtx/mediamtx /mediamtx
+COPY mediamtx.yml /mediamtx.yml
+
+ENTRYPOINT ["/mediamtx", "/mediamtx.yml"]
