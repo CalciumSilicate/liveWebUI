@@ -156,6 +156,26 @@ async function loadChannels() {
   adminPanel.hidden = false;
 }
 
+async function checkAdminSession() {
+  return requestJson("/api/admin/session", {
+    headers: {},
+  });
+}
+
+async function initializeAdmin() {
+  try {
+    const session = await checkAdminSession();
+    if (session.authenticated) {
+      await loadChannels();
+      return;
+    }
+  } catch {
+    // Fall through to the login panel. Session probing should not create a noisy first load.
+  }
+  loginPanel.hidden = false;
+  adminPanel.hidden = true;
+}
+
 loginForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const password = document.getElementById("login-password")?.value || "";
@@ -293,16 +313,28 @@ logoutButton?.addEventListener("click", async () => {
 
 setInterval(() => {
   if (!adminPanel.hidden) {
-    loadChannels().catch((error) => {
-      if (String(error.message).includes("未登录")) {
-        adminPanel.hidden = true;
-        loginPanel.hidden = false;
-      }
-    });
+    checkAdminSession()
+      .then((session) => {
+        if (!session.authenticated) {
+          adminPanel.hidden = true;
+          loginPanel.hidden = false;
+          return;
+        }
+        return loadChannels();
+      })
+      .catch((error) => {
+        if (String(error.message).includes("未登录")) {
+          adminPanel.hidden = true;
+          loginPanel.hidden = false;
+        } else {
+          console.error(error);
+        }
+      });
   }
 }, 5000);
 
-loadChannels().catch(() => {
+initializeAdmin().catch((error) => {
+  console.error(error);
   loginPanel.hidden = false;
   adminPanel.hidden = true;
 });

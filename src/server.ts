@@ -471,11 +471,15 @@ app.post("/api/admin/logout", async (_, reply) => {
   return { ok: true };
 });
 
+app.get("/api/admin/session", async (request) => ({
+  authenticated: requireAdmin(request),
+}));
+
 app.addHook("preHandler", async (request, reply) => {
   if (!request.url.startsWith("/api/admin/")) {
     return;
   }
-  if (request.url === "/api/admin/login") {
+  if (request.url === "/api/admin/login" || request.url === "/api/admin/session") {
     return;
   }
   if (!requireAdmin(request)) {
