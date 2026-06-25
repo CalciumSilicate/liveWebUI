@@ -34,17 +34,25 @@ export class MediaService {
   }
 
   async kickRtmpConnection(id: string): Promise<void> {
-    await this.request(`/v3/rtmpconns/kick/${id}`, {
+    await this.request(`/v3/rtmpconns/kick/${encodeURIComponent(id)}`, {
       method: "POST",
     });
   }
 
   async kickChannelPublishers(slug: string): Promise<void> {
     const connections = await this.listRtmpConnections();
+    // 仅踢推流连接;转码进程作为 reader 也连在同一 path 上,不能一并踢掉。
     const targetIds = connections
-      .filter((connection) => connection.path === slug)
+      .filter((connection) => connection.path === slug && connection.state === "publish")
       .map((connection) => connection.id);
 
-    await Promise.all(targetIds.map((id) => this.kickRtmpConnection(id)));
+    // 尽力踢掉全部推流连接,单个失败不影响其余,但仍向调用方上报失败。
+    const results = await Promise.allSettled(
+      targetIds.map((id) => this.kickRtmpConnection(id)),
+    );
+    const failed = results.filter((result) => result.status === "rejected").length;
+    if (failed > 0) {
+      throw new Error(`failed to kick ${failed}/${targetIds.length} publisher(s) for ${slug}`);
+    }
   }
 }

@@ -9,7 +9,7 @@ import fastifyWebsocket from "@fastify/websocket";
 import { AppDatabase } from "./db";
 import { MediaService } from "./media";
 import { escapeHtml, renderHtmlPage } from "./templates";
-import { Channel, CommentView } from "./types";
+import { Channel, CommentView, MediaPath } from "./types";
 import { createAdminToken, createViewerToken, verifyAdminToken, verifyViewerToken } from "./token";
 import {
   normalizeSlug,
@@ -98,6 +98,8 @@ const webrtcTranscoder = new ManagedTranscoderManager(
   webrtcProfile,
 );
 
+// 每个在线渠道会同时运行两个转码进程:HLS(veryfast/AAC,兼容播放)与 WebRTC(ultrafast/Opus,低延迟)。
+// 二者编码参数与输出协议不同,无法共用同一路输出,因此按渠道各跑一个,代价是 CPU/内存翻倍。
 const transcoderManagers = [
   hlsTranscoder,
   webrtcTranscoder,
@@ -295,33 +297,49 @@ function channelUrls(baseUrl: URL, channel: Channel): {
   };
 }
 
+function buildStatusMap(paths: MediaPath[]): Map<string, { online: boolean; readers: number }> {
+  const map = new Map<string, { online: boolean; readers: number }>();
+  for (const item of paths) {
+    map.set(item.name, {
+      online: item.online,
+      readers: item.readers?.length ?? 0,
+    });
+  }
+  return map;
+}
+
 async function channelStatusMap(): Promise<Map<string, { online: boolean; readers: number }>> {
   try {
-    const items = await media.listPaths();
-    const map = new Map<string, { online: boolean; readers: number }>();
-    for (const item of items) {
-      map.set(item.name, {
-        online: item.online,
-        readers: item.readers?.length ?? 0,
-      });
-    }
-    return map;
+    return buildStatusMap(await media.listPaths());
   } catch (error) {
     app.log.error(error, "failed to load MediaMTX paths");
     return new Map();
   }
 }
 
-async function syncTranscoders(): Promise<void> {
+async function syncTranscoders(paths?: MediaPath[]): Promise<void> {
   try {
     const channels = db.listChannels();
-    const paths = await media.listPaths();
+    const resolvedPaths = paths ?? (await media.listPaths());
     for (const manager of transcoderManagers) {
-      manager.sync(channels, paths);
+      manager.sync(channels, resolvedPaths);
     }
   } catch (error) {
     app.log.error(error, "failed to sync browser transcoders");
   }
+}
+
+// 拉取一次 MediaMTX 路径,既驱动转码调谐又返回状态表,避免同一请求内重复查询。
+async function refreshAndGetStatus(): Promise<Map<string, { online: boolean; readers: number }>> {
+  let paths: MediaPath[];
+  try {
+    paths = await media.listPaths();
+  } catch (error) {
+    app.log.error(error, "failed to load MediaMTX paths");
+    return new Map();
+  }
+  await syncTranscoders(paths);
+  return buildStatusMap(paths);
 }
 
 function adminPage(): string {
@@ -594,18 +612,21 @@ app.patch("/api/admin/channels/:id", async (request, reply) => {
 
   try {
     const { before, after } = db.updateChannel(channelId, input);
-    if (
-      before.slug !== after.slug ||
-      before.viewerPassword !== after.viewerPassword
-    ) {
+    const slugChanged = before.slug !== after.slug;
+    const viewerPasswordChanged = before.viewerPassword !== after.viewerPassword;
+
+    // 观看码或 slug 变化都会使旧的观看 token 失效(authVersion 已自增),需断开现有观众重新鉴权。
+    if (slugChanged || viewerPasswordChanged) {
       disconnectViewerSockets(before.slug);
+    }
+
+    // 仅 slug 变化才需停掉旧 slug 的转码并踢掉推流端;改观看码不影响推拉流,无需打断转码。
+    if (slugChanged) {
       stopTranscodersForSlug(before.slug);
-      if (before.slug !== after.slug) {
-        try {
-          await media.kickChannelPublishers(before.slug);
-        } catch (error) {
-          request.log.error(error, "failed to kick publishers after slug change");
-        }
+      try {
+        await media.kickChannelPublishers(before.slug);
+      } catch (error) {
+        request.log.error(error, "failed to kick publishers after slug change");
       }
     }
     return after;
@@ -688,8 +709,7 @@ app.post("/api/public/channels/:slug/access", async (request, reply) => {
     return reply.code(401).send({ error: "访问被拒绝" });
   }
 
-  await syncTranscoders();
-  const pathMap = await channelStatusMap();
+  const pathMap = await refreshAndGetStatus();
   const runtime = runtimeFromPathMap(pathMap, channel.slug);
 
   const token = createViewerToken(config.sessionSecret, channel.slug, channel.authVersion);
@@ -719,8 +739,7 @@ app.get("/api/public/channels/:slug", async (request, reply) => {
     return reply.code(401).send({ error: "未授权" });
   }
 
-  await syncTranscoders();
-  const pathMap = await channelStatusMap();
+  const pathMap = await refreshAndGetStatus();
   const runtime = runtimeFromPathMap(pathMap, channel.slug);
 
   return {
@@ -793,6 +812,7 @@ app.post("/internal/mediamtx/auth", async (request, reply) => {
   }
 
   if (action === "read" && protocol === "rtmp") {
+    // HLS 与 WebRTC 转码共用同一组内部读取凭证(见 transcoder.ts internalReadCredentials),故只需校验其一。
     if (
       body.user === hlsProfile.inputUser &&
       body.password === hlsProfile.inputPass &&
@@ -843,65 +863,84 @@ app.route({
   },
 });
 
-app.get("/media/*", async (request, reply) => {
-  const wildcard = (request.params as { "*": string })["*"];
-  const normalizedPath = wildcard.replace(/^\/+/, "");
-  if (isMediaStaticAsset(normalizedPath)) {
-    const assetResponse = await fetch(`${config.mediaHlsOrigin}/${normalizedPath}`);
-    if (!assetResponse.ok) {
-      return reply.code(assetResponse.status).send(await assetResponse.text());
-    }
+const MEDIA_PROXY_TIMEOUT_MS = 15000;
+const MEDIA_FORWARD_HEADERS = [
+  "content-type",
+  "cache-control",
+  "content-length",
+  "content-range",
+  "accept-ranges",
+  "etag",
+  "last-modified",
+];
 
-    const contentType = assetResponse.headers.get("content-type");
-    if (contentType) {
-      reply.header("content-type", contentType);
-    }
-    const cacheControl = assetResponse.headers.get("cache-control");
-    if (cacheControl) {
-      reply.header("cache-control", cacheControl);
-    }
-
-    const body = assetResponse.body;
-    if (!body) {
-      return reply.code(204).send();
-    }
-
-    return reply.send(Readable.fromWeb(body));
+async function proxyMediaUpstream(
+  reply: any,
+  url: string,
+  init: { method: string; headers?: Record<string, string> },
+) {
+  let upstream: Response;
+  try {
+    upstream = await fetch(url, {
+      method: init.method,
+      headers: init.headers,
+      signal: AbortSignal.timeout(MEDIA_PROXY_TIMEOUT_MS),
+    });
+  } catch (error) {
+    app.log.error(error, "media upstream request failed");
+    return reply.code(502).send("Bad Gateway");
   }
-
-  const slug = normalizeSlug(toSourceSlug(normalizedPath.split("/")[0] ?? ""));
-  const token = getViewerTokenFromRequest(request, slug);
-  const channel = verifyViewerAccess(slug, token);
-
-  if (!channel) {
-    return reply.code(401).send("Unauthorized");
-  }
-
-  const upstream = await fetch(`${config.mediaHlsOrigin}/${normalizedPath}`, {
-    headers: {
-      authorization: `Bearer ${token}`,
-    },
-  });
 
   if (!upstream.ok) {
     return reply.code(upstream.status).send(await upstream.text());
   }
 
-  const contentType = upstream.headers.get("content-type");
-  if (contentType) {
-    reply.header("content-type", contentType);
+  for (const header of MEDIA_FORWARD_HEADERS) {
+    const value = upstream.headers.get(header);
+    if (value) {
+      reply.header(header, value);
+    }
   }
-  const cacheControl = upstream.headers.get("cache-control");
-  if (cacheControl) {
-    reply.header("cache-control", cacheControl);
-  }
+  reply.code(upstream.status);
 
   const body = upstream.body;
-  if (!body) {
-    return reply.code(204).send();
+  if (init.method === "HEAD" || !body) {
+    return reply.send();
   }
-
   return reply.send(Readable.fromWeb(body));
+}
+
+app.route({
+  method: ["GET", "HEAD"],
+  url: "/media/*",
+  handler: async (request, reply) => {
+    const wildcard = (request.params as { "*": string })["*"];
+    const normalizedPath = wildcard.replace(/^\/+/, "");
+    const range = request.headers.range;
+    const url = `${config.mediaHlsOrigin}/${normalizedPath}`;
+
+    if (isMediaStaticAsset(normalizedPath)) {
+      return proxyMediaUpstream(reply, url, {
+        method: request.method,
+        headers: range ? { range } : undefined,
+      });
+    }
+
+    const slug = normalizeSlug(toSourceSlug(normalizedPath.split("/")[0] ?? ""));
+    const token = getViewerTokenFromRequest(request, slug);
+    const channel = verifyViewerAccess(slug, token);
+    if (!channel) {
+      return reply.code(401).send("Unauthorized");
+    }
+
+    return proxyMediaUpstream(reply, url, {
+      method: request.method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(range ? { range } : {}),
+      },
+    });
+  },
 });
 
 app.get("/favicon.ico", async (_, reply) => {
