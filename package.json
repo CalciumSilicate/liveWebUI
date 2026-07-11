@@ -5,8 +5,11 @@
   "description": "Multi-channel RTMP live Web UI with admin console, WebRTC/HLS viewer, and comments",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:web": "npm --prefix web ci && npm --prefix web run build",
+    "build:all": "npm run build:web && npm run build",
     "start": "node dist/server.js",
-    "dev": "tsx watch src/server.ts"
+    "dev": "tsx watch src/server.ts",
+    "dev:web": "npm --prefix web run dev"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

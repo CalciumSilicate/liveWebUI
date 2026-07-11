@@ -5,7 +5,7 @@ WORKDIR /app
 COPY vendor/node-runtime/ /
 COPY node_modules ./node_modules
 COPY dist ./dist
-COPY public ./public
+COPY web/dist ./web/dist
 COPY package.json ./package.json
 
 ENV NODE_ENV=production

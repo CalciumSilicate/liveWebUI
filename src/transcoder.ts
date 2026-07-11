@@ -286,7 +286,8 @@ function buildFfmpegArgs(options: FfmpegArgsOptions): string[] {
     "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p",
     "-r",
     "30",
-    "-vsync",
+    // 恒定帧率:用 -fps_mode(ffmpeg 5.1+)替代已被新版移除的旧别名 -vsync。
+    "-fps_mode",
     "cfr",
     "-c:v",
     "libx264",

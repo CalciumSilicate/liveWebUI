@@ -37,6 +37,7 @@ export class AppDatabase {
         enabled INTEGER NOT NULL DEFAULT 1,
         publishPassword TEXT NOT NULL,
         viewerPassword TEXT NOT NULL,
+        relayUrl TEXT NOT NULL DEFAULT '',
         authVersion INTEGER NOT NULL DEFAULT 1,
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL
@@ -54,6 +55,15 @@ export class AppDatabase {
       CREATE INDEX IF NOT EXISTS idx_comments_channel_created
       ON comments(channelId, createdAt DESC);
     `);
+
+    // 迁移:为早于「转推」功能创建的旧库补上 relayUrl 列。
+    const hasRelayUrl = this.db
+      .prepare<[], { name: string }>("PRAGMA table_info(channels)")
+      .all()
+      .some((column) => column.name === "relayUrl");
+    if (!hasRelayUrl) {
+      this.db.exec("ALTER TABLE channels ADD COLUMN relayUrl TEXT NOT NULL DEFAULT ''");
+    }
   }
 
   listChannels(): Channel[] {
@@ -80,14 +90,15 @@ export class AppDatabase {
     label: string;
     publishPassword: string;
     viewerPassword: string;
+    relayUrl: string;
     enabled: boolean;
   }): Channel {
     const timestamp = now();
     const stmt = this.db.prepare(`
       INSERT INTO channels (
-        slug, label, enabled, publishPassword, viewerPassword, authVersion, createdAt, updatedAt
+        slug, label, enabled, publishPassword, viewerPassword, relayUrl, authVersion, createdAt, updatedAt
       )
-      VALUES (@slug, @label, @enabled, @publishPassword, @viewerPassword, @authVersion, @createdAt, @updatedAt)
+      VALUES (@slug, @label, @enabled, @publishPassword, @viewerPassword, @relayUrl, @authVersion, @createdAt, @updatedAt)
     `);
     const info = stmt.run({
       slug: normalizeSlug(input.slug),
@@ -95,6 +106,7 @@ export class AppDatabase {
       enabled: input.enabled ? 1 : 0,
       publishPassword: input.publishPassword,
       viewerPassword: input.viewerPassword,
+      relayUrl: input.relayUrl,
       authVersion: 1,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -119,6 +131,7 @@ export class AppDatabase {
       input.publishPassword !== undefined ? input.publishPassword : before.publishPassword;
     const viewerPassword =
       input.viewerPassword !== undefined ? input.viewerPassword : before.viewerPassword;
+    const relayUrl = input.relayUrl !== undefined ? input.relayUrl : before.relayUrl;
     const authVersion =
       slug !== before.slug || viewerPassword !== before.viewerPassword
         ? before.authVersion + 1
@@ -131,6 +144,7 @@ export class AppDatabase {
             label = @label,
             publishPassword = @publishPassword,
             viewerPassword = @viewerPassword,
+            relayUrl = @relayUrl,
             authVersion = @authVersion,
             updatedAt = @updatedAt
         WHERE id = @id
@@ -141,6 +155,7 @@ export class AppDatabase {
         label,
         publishPassword,
         viewerPassword,
+        relayUrl,
         authVersion,
         updatedAt: now(),
       });

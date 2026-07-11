@@ -5,6 +5,7 @@ export type ChannelRecord = {
   enabled: number;
   publishPassword: string;
   viewerPassword: string;
+  relayUrl: string;
   authVersion: number;
   createdAt: number;
   updatedAt: number;
@@ -17,6 +18,8 @@ export type Channel = {
   enabled: boolean;
   publishPassword: string;
   viewerPassword: string;
+  // 转推目标 RTMP 完整地址(含推流码);空字符串表示不转推。
+  relayUrl: string;
   authVersion: number;
   createdAt: number;
   updatedAt: number;
@@ -27,6 +30,7 @@ export type ChannelUpdateInput = {
   label?: string;
   publishPassword?: string;
   viewerPassword?: string;
+  relayUrl?: string;
 };
 
 export type CommentRecord = {

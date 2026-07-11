@@ -35,6 +35,11 @@ collect_runtime_deps() {
 
 cd "$ROOT_DIR"
 
+# 构建前端 SPA(web/dist),供 Dockerfile.app 直接拷贝。
+"$NPM_BIN" --prefix web ci
+"$NPM_BIN" --prefix web run build
+
+# 构建后端并裁剪 devDependencies。
 "$NPM_BIN" ci
 "$NPM_BIN" run build
 "$NPM_BIN" prune --omit=dev

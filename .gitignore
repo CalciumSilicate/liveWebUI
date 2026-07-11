@@ -1,9 +1,12 @@
 node_modules
 dist
+web/node_modules
+web/dist
 data
 .env
 vendor/mediamtx
 vendor/node-runtime
+vendor/ffmpeg
 .env.*
 !.env.example
 npm-debug.log*

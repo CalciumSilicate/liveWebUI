@@ -1,6 +1,6 @@
 import { setInterval } from "node:timers";
 import { Readable } from "node:stream";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import type { RawData, WebSocket } from "ws";
 import Fastify from "fastify";
 import fastifyCookie from "@fastify/cookie";
@@ -8,7 +8,6 @@ import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
 import { AppDatabase } from "./db";
 import { MediaService } from "./media";
-import { escapeHtml, renderHtmlPage } from "./templates";
 import { Channel, CommentView, MediaPath } from "./types";
 import { createAdminToken, createViewerToken, verifyAdminToken, verifyViewerToken } from "./token";
 import {
@@ -25,6 +24,7 @@ import {
   toSourceSlug,
   toWebRtcPath,
 } from "./transcoder";
+import { RelayManager } from "./relay";
 
 type Config = {
   appPort: number;
@@ -72,6 +72,11 @@ function loadConfig(): Config {
 }
 
 const config = loadConfig();
+
+// 前端 SPA 的构建产物目录。相对 __dirname 解析,兼顾 dev(src/)、构建(dist/)与 Docker(/app/dist):
+// 三种情况下 `../web/dist` 都指向同一份产物;可用 WEB_DIST 环境变量覆盖。
+const webDistDir = process.env.WEB_DIST ?? resolve(__dirname, "..", "web", "dist");
+
 const db = new AppDatabase(config.dbPath);
 const media = new MediaService(config.mediaApiUrl);
 const hlsProfile = createHlsProfile(config.sessionSecret);
@@ -105,10 +110,20 @@ const transcoderManagers = [
   webrtcTranscoder,
 ];
 
+// 转推:把在线源用 -c copy 原样转发到渠道配置的外部 RTMP 目标。拉源复用 HLS/WebRTC 的内部读凭证。
+const relayManager = new RelayManager({
+  ffmpegBin: config.ffmpegBin,
+  rtmpOrigin: config.mediaRtmpOrigin,
+  readUser: hlsProfile.inputUser,
+  readPass: hlsProfile.inputPass,
+  logger: app.log,
+});
+
 function stopTranscodersForSlug(slug: string): void {
   for (const manager of transcoderManagers) {
     manager.stop(slug);
   }
+  relayManager.stop(slug);
 }
 
 function buildWebRtcWhepUrl(request: { protocol: string; headers: { host?: string } }, slug: string): string {
@@ -324,6 +339,7 @@ async function syncTranscoders(paths?: MediaPath[]): Promise<void> {
     for (const manager of transcoderManagers) {
       manager.sync(channels, resolvedPaths);
     }
+    relayManager.sync(channels, resolvedPaths);
   } catch (error) {
     app.log.error(error, "failed to sync browser transcoders");
   }
@@ -342,128 +358,17 @@ async function refreshAndGetStatus(): Promise<Map<string, { online: boolean; rea
   return buildStatusMap(paths);
 }
 
-function adminPage(): string {
-  return renderHtmlPage({
-    title: "后台",
-    bodyClass: "admin-shell",
-    scriptPath: "/assets/admin.js",
-    body: `
-      <main class="page admin-page">
-        <section class="panel admin-login" id="login-panel">
-          <h1>后台</h1>
-          <form id="login-form" class="stack tight">
-            <label class="sr-only" for="login-password">密码</label>
-            <input name="username" type="text" autocomplete="username" value="admin" hidden />
-            <input class="ui-input" id="login-password" name="password" type="password" placeholder="密码" autocomplete="current-password" />
-            <button class="ui-button" type="submit">进</button>
-          </form>
-          <p class="error" id="login-error" hidden></p>
-        </section>
-
-        <section class="panel admin-app" id="admin-panel" hidden>
-          <header class="admin-head">
-            <h1>渠道</h1>
-            <div class="head-actions">
-              <button class="ui-button" id="refresh-button" type="button">刷新</button>
-              <button class="ui-button" id="logout-button" type="button">退</button>
-            </div>
-          </header>
-
-          <form id="create-form" class="channel-form grid-form">
-            <label class="sr-only" for="create-label">名称</label>
-            <input class="ui-input" id="create-label" name="label" type="text" placeholder="名称" maxlength="40" required />
-            <label class="sr-only" for="create-slug">slug</label>
-            <input class="ui-input" id="create-slug" name="slug" type="text" placeholder="slug" maxlength="32" required />
-            <label class="sr-only" for="create-publish-password">推流码</label>
-            <input class="ui-input" id="create-publish-password" name="publishPassword" type="text" placeholder="推流码" maxlength="64" required />
-            <label class="sr-only" for="create-viewer-password">观看码</label>
-            <input class="ui-input" id="create-viewer-password" name="viewerPassword" type="text" placeholder="观看码" maxlength="64" required />
-            <label class="switch-line">
-              <input name="enabled" type="checkbox" checked />
-              <span>开</span>
-            </label>
-            <button class="ui-button" type="submit">新建</button>
-          </form>
-
-          <p class="error" id="create-error" hidden></p>
-
-          <div id="channels" class="channel-list"></div>
-        </section>
-      </main>
-    `,
-  });
-}
-
-function watchPage(channel: Channel): string {
-  const channelLabel = escapeHtml(channel.label);
-  return renderHtmlPage({
-    title: channel.label,
-    bodyClass: "watch-shell",
-    scriptPath: "/assets/watch.js",
-    body: `
-      <main class="page watch-page" data-slug="${channel.slug}" data-label="${channelLabel}">
-        <section class="video-panel">
-          <header class="watch-head">
-            <h1>${channelLabel}</h1>
-            <div class="watch-meta">
-              <span class="badge" id="watch-status">离线</span>
-              <div class="mode-switch" id="mode-switch">
-                <button class="ui-button ui-button-ghost mode-button" data-mode="webrtc" type="button">极速</button>
-                <button class="ui-button ui-button-ghost mode-button" data-mode="hls" type="button">兼容</button>
-              </div>
-            </div>
-          </header>
-          <div class="player-frame" id="player-frame">
-            <video id="player" controls playsinline muted autoplay preload="metadata"></video>
-            <div class="player-cover" id="player-cover">离线</div>
-          </div>
-          <p class="player-note" id="player-note" hidden></p>
-          <section class="access-panel panel" id="access-panel">
-            <form id="access-form" class="stack tight">
-              <label class="sr-only" for="viewer-password">观看码</label>
-              <input name="username" type="text" autocomplete="username" value="${channel.slug}" hidden />
-              <input class="ui-input" id="viewer-password" type="password" placeholder="观看码" autocomplete="current-password" />
-              <button class="ui-button" type="submit">进入</button>
-            </form>
-            <p class="error" id="access-error" hidden></p>
-          </section>
-        </section>
-
-        <aside class="chat-panel panel">
-          <div class="chat-head">
-            <label class="sr-only" for="author-name">名字</label>
-            <input class="ui-input" id="author-name" type="text" placeholder="名字" maxlength="24" />
-          </div>
-          <div id="comments" class="comments"></div>
-          <form id="comment-form" class="comment-form">
-            <label class="sr-only" for="comment-body">评论</label>
-            <textarea class="ui-textarea" id="comment-body" rows="3" maxlength="200" placeholder="评论"></textarea>
-            <button class="ui-button" type="submit">发</button>
-          </form>
-          <p class="error" id="comment-error" hidden></p>
-        </aside>
-      </main>
-    `,
-  });
-}
-
 app.register(fastifyCookie);
+// SPA 静态资源:index.html、/assets/*(带 hash 的 JS/CSS)、/fonts/*、favicon。
+// 未命中的文件会走 setNotFoundHandler,由那里回退到 index.html 支撑前端路由。
 app.register(fastifyStatic, {
-  root: join(process.cwd(), "public"),
-  prefix: "/assets/",
+  root: webDistDir,
+  prefix: "/",
 });
 
 app.get("/health", async () => ({
   ok: true,
 }));
-
-app.get("/", async (_, reply) => {
-  reply.redirect("/admin");
-});
-
-app.get("/admin", async (_, reply) => {
-  reply.type("text/html; charset=utf-8").send(adminPage());
-});
 
 app.post("/api/admin/login", async (request, reply) => {
   const body = request.body as { password?: string };
@@ -523,9 +428,24 @@ app.get("/api/admin/channels", async (request) => {
       webrtcOnline: runtime.webrtcOnline,
       hlsReaders: runtime.hlsReaders,
       webrtcReaders: runtime.webrtcReaders,
+      // 转推是否已配置目标、以及当前是否有活跃转推进程。
+      relayConfigured: channel.relayUrl.trim().length > 0,
+      relaying: relayManager.isRelaying(channel.slug),
     };
   });
 });
+
+// 转推目标地址:空字符串表示不转推;非空必须是 rtmp:// 或 rtmps:// 完整地址。
+function normalizeRelayUrl(value: string): { ok: true; url: string } | { ok: false } {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return { ok: true, url: "" };
+  }
+  if (!/^rtmps?:\/\//i.test(trimmed)) {
+    return { ok: false };
+  }
+  return { ok: true, url: trimmed };
+}
 
 app.post("/api/admin/channels", async (request, reply) => {
   const body = request.body as {
@@ -533,6 +453,7 @@ app.post("/api/admin/channels", async (request, reply) => {
     label?: string;
     publishPassword?: string;
     viewerPassword?: string;
+    relayUrl?: string;
     enabled?: boolean;
   };
 
@@ -541,6 +462,7 @@ app.post("/api/admin/channels", async (request, reply) => {
   const publishPassword = body?.publishPassword ?? "";
   const viewerPassword = body?.viewerPassword ?? "";
   const enabled = body?.enabled !== false;
+  const relay = normalizeRelayUrl(body?.relayUrl ?? "");
 
   if (!validateSlug(slug)) {
     return reply.code(400).send({ error: "slug 需为 3-32 位小写字母、数字或 -" });
@@ -551,6 +473,9 @@ app.post("/api/admin/channels", async (request, reply) => {
   if (!publishPassword || !viewerPassword) {
     return reply.code(400).send({ error: "密码不能为空" });
   }
+  if (!relay.ok) {
+    return reply.code(400).send({ error: "转推地址需以 rtmp:// 或 rtmps:// 开头" });
+  }
 
   try {
     const channel = db.createChannel({
@@ -558,6 +483,7 @@ app.post("/api/admin/channels", async (request, reply) => {
       label,
       publishPassword,
       viewerPassword,
+      relayUrl: relay.url,
       enabled,
     });
     return reply.code(201).send(channel);
@@ -574,6 +500,7 @@ app.patch("/api/admin/channels/:id", async (request, reply) => {
     label?: string;
     publishPassword?: string;
     viewerPassword?: string;
+    relayUrl?: string;
   };
 
   const input: {
@@ -581,6 +508,7 @@ app.patch("/api/admin/channels/:id", async (request, reply) => {
     label?: string;
     publishPassword?: string;
     viewerPassword?: string;
+    relayUrl?: string;
   } = {};
 
   if (body.slug !== undefined) {
@@ -609,6 +537,13 @@ app.patch("/api/admin/channels/:id", async (request, reply) => {
     }
     input.viewerPassword = body.viewerPassword;
   }
+  if (body.relayUrl !== undefined) {
+    const relay = normalizeRelayUrl(body.relayUrl);
+    if (!relay.ok) {
+      return reply.code(400).send({ error: "转推地址需以 rtmp:// 或 rtmps:// 开头" });
+    }
+    input.relayUrl = relay.url;
+  }
 
   try {
     const { before, after } = db.updateChannel(channelId, input);
@@ -629,6 +564,8 @@ app.patch("/api/admin/channels/:id", async (request, reply) => {
         request.log.error(error, "failed to kick publishers after slug change");
       }
     }
+    // 立即同步一次:改了转推目标能尽快按新地址起/停,不用等下一轮定时轮询。
+    void syncTranscoders();
     return after;
   } catch (error) {
     request.log.error(error);
@@ -683,15 +620,6 @@ app.delete("/api/admin/channels/:id", async (request, reply) => {
     request.log.error(error, "failed to kick publishers on delete");
   }
   return { ok: true };
-});
-
-app.get("/watch/:slug", async (request, reply) => {
-  const slug = normalizeSlug((request.params as { slug: string }).slug);
-  const channel = db.getChannelBySlug(slug);
-  if (!channel) {
-    return reply.code(404).type("text/plain; charset=utf-8").send("Not found");
-  }
-  reply.type("text/html; charset=utf-8").send(watchPage(channel));
 });
 
 app.post("/api/public/channels/:slug/access", async (request, reply) => {
@@ -853,16 +781,6 @@ app.post("/internal/mediamtx/auth", async (request, reply) => {
   return reply.code(401).send({ error: "denied" });
 });
 
-const HLS_JS_CDN = "https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.6.13/hls.min.js";
-
-app.route({
-  method: ["GET", "HEAD"],
-  url: "/media/hls.min.js",
-  handler: async (_, reply) => {
-    reply.redirect(HLS_JS_CDN);
-  },
-});
-
 const MEDIA_PROXY_TIMEOUT_MS = 15000;
 const MEDIA_FORWARD_HEADERS = [
   "content-type",
@@ -943,8 +861,17 @@ app.route({
   },
 });
 
-app.get("/favicon.ico", async (_, reply) => {
-  reply.code(204).send();
+// SPA 前端路由兜底:非 API / 媒体 / WS 的 GET 请求且静态文件未命中时,返回 index.html,
+// 交给前端 react-router 决定渲染管理台还是观看页。
+const SPA_FALLBACK_EXCLUDE = ["/api", "/media", "/ws", "/internal", "/health"];
+app.setNotFoundHandler((request, reply) => {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return reply.code(404).send({ error: "not-found" });
+  }
+  if (SPA_FALLBACK_EXCLUDE.some((prefix) => request.url.startsWith(prefix))) {
+    return reply.code(404).send({ error: "not-found" });
+  }
+  return reply.type("text/html; charset=utf-8").sendFile("index.html");
 });
 
 app.register(async (wsApp) => {
@@ -1036,16 +963,14 @@ async function start(): Promise<void> {
   }, 1500);
   timer.unref();
 
-  process.on("SIGTERM", () => {
+  const shutdown = () => {
     for (const manager of transcoderManagers) {
       manager.stopAll();
     }
-  });
-  process.on("SIGINT", () => {
-    for (const manager of transcoderManagers) {
-      manager.stopAll();
-    }
-  });
+    relayManager.stopAll();
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 
   await app.listen({
     port: config.appPort,

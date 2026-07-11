@@ -6,13 +6,19 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# 先装后端依赖(含 better-sqlite3 原生编译)。
 COPY package.json package-lock.json* ./
 RUN npm ci
 
+# 构建前端 SPA:独立的 web/ 子项目,产物落在 web/dist。
+COPY web/package.json web/package-lock.json* ./web/
+RUN cd web && npm ci
+COPY web ./web
+RUN cd web && npm run build
+
+# 构建后端并裁剪掉 devDependencies。
 COPY tsconfig.json ./
 COPY src ./src
-COPY public ./public
-
 RUN npm run build \
   && npm prune --omit=dev
 
@@ -24,7 +30,7 @@ ENV NODE_ENV=production
 
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-COPY --from=build /app/public ./public
+COPY --from=build /app/web/dist ./web/dist
 
 RUN mkdir -p /app/data
 
