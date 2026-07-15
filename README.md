@@ -11,6 +11,7 @@
 - WebRTC 极速观看
 - HLS 兼容观看
 - 评论区
+- 自动录制、按时长分片、按空间预算滚动清理
 
 ## 架构
 
@@ -28,6 +29,14 @@
 - `42113`: MediaMTX WebRTC / WHEP
 - `42114/udp`: MediaMTX WebRTC UDP
 - `42115`: MediaMTX WebRTC TCP fallback
+
+## Recording
+
+- 管理台每个渠道可单独开启「自动录制」。
+- 直播源在线时,后端用 FFmpeg 以 `-c copy` 方式录制源流,按配置的秒数自动切成 MP4 分片。
+- 默认保存到 `data/recordings/<slug>/`;可用 `RECORDINGS_DIR` 覆盖。
+- 每个渠道有独立空间预算(MB),超出后自动删除最旧分片。
+- 删除渠道时会删除该渠道录制目录。
 
 ## Run
 
@@ -53,12 +62,41 @@ sudo apt-get install -y nodejs npm build-essential python3
 
 ## 本地开发
 
-两个进程分别跑，前端 dev server 通过代理把 `/api`、`/media`、`/ws` 转发到后端：
+Windows 本地开发统一使用一个 `uv` 命令。它会在同一个终端里启动 MediaMTX、后端和前端 dev server，不再额外弹多个 PowerShell 窗口：
+
+```powershell
+uv run scripts/dev.py
+```
+
+默认监听 `0.0.0.0`，默认后台密码是 `callmegpt`，按 `Ctrl+C` 会停止全部子进程。如本机没有 MediaMTX 或 FFmpeg，脚本会自动下载到 `vendor/` 下用于本地开发。默认端口是 Web/API `42110`、RTMP `42111`、HLS `42112`、前端 dev server `5278`。
+
+常用入口：
+
+```powershell
+npm run dev
+npm run dev:local
+```
+
+如果要显式设置密码：
+
+```powershell
+uv run scripts/dev.py --admin-password callmegpt
+```
+
+只清理当前项目占用的本地 dev 进程，不启动新实例：
+
+```powershell
+uv run scripts/dev.py --stop-only
+```
+
+旧的 PowerShell 入口 `npm run dev:ps` 仅作为兼容入口，会转发到同一个 `uv` supervisor，不再打开多个窗口。
+
+也可以调试时手动拆开跑。前端 dev server 通过代理把 `/api`、`/media`、`/ws` 转发到后端：
 
 ```bash
 # 终端 1：后端(默认 42110),需要 ADMIN_PASSWORD / SESSION_SECRET 等环境变量
 npm install
-npm run dev
+npm run dev:backend
 
 # 终端 2：前端 dev server(http://localhost:5278)
 npm run dev:web

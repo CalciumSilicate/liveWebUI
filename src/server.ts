@@ -25,6 +25,8 @@ import {
   toWebRtcPath,
 } from "./transcoder";
 import { RelayManager } from "./relay";
+import { RecorderManager } from "./recorder";
+import { RecordingLibrary } from "./recording-library";
 
 type Config = {
   appPort: number;
@@ -37,6 +39,7 @@ type Config = {
   dbPath: string;
   ffmpegBin: string;
   publicWebRtcPort: number;
+  recordingsDir: string;
 };
 
 type ChannelRuntimeInfo = {
@@ -68,6 +71,7 @@ function loadConfig(): Config {
     dbPath: process.env.DB_PATH ?? resolve(cwd, "data", "app.db"),
     ffmpegBin: process.env.FFMPEG_BIN ?? "/usr/bin/ffmpeg",
     publicWebRtcPort: Number(process.env.PUBLIC_WEBRTC_PORT ?? 42113),
+    recordingsDir: process.env.RECORDINGS_DIR ?? resolve(cwd, "data", "recordings"),
   };
 }
 
@@ -118,12 +122,26 @@ const relayManager = new RelayManager({
   readPass: hlsProfile.inputPass,
   logger: app.log,
 });
+const recorderManager = new RecorderManager({
+  ffmpegBin: config.ffmpegBin,
+  rtmpOrigin: config.mediaRtmpOrigin,
+  readUser: hlsProfile.inputUser,
+  readPass: hlsProfile.inputPass,
+  rootDir: config.recordingsDir,
+  logger: app.log,
+});
+const recordingLibrary = new RecordingLibrary({
+  ffmpegBin: config.ffmpegBin,
+  rootDir: config.recordingsDir,
+  logger: app.log,
+});
 
 function stopTranscodersForSlug(slug: string): void {
   for (const manager of transcoderManagers) {
     manager.stop(slug);
   }
   relayManager.stop(slug);
+  recorderManager.stop(slug);
 }
 
 function buildWebRtcWhepUrl(request: { protocol: string; headers: { host?: string } }, slug: string): string {
@@ -340,6 +358,7 @@ async function syncTranscoders(paths?: MediaPath[]): Promise<void> {
       manager.sync(channels, resolvedPaths);
     }
     relayManager.sync(channels, resolvedPaths);
+    recorderManager.sync(channels, resolvedPaths);
   } catch (error) {
     app.log.error(error, "failed to sync browser transcoders");
   }
@@ -431,11 +450,12 @@ app.get("/api/admin/channels", async (request) => {
       // 转推是否已配置目标、以及当前是否有活跃转推进程。
       relayConfigured: channel.relayUrl.trim().length > 0,
       relaying: relayManager.isRelaying(channel.slug),
+      recording: recorderManager.stats(channel),
     };
   });
 });
 
-// 转推目标地址:空字符串表示不转推;非空必须是 rtmp:// 或 rtmps:// 完整地址。
+// 转推服务器地址:空字符串表示不转推;旧数据可继续使用包含推流码的完整地址。
 function normalizeRelayUrl(value: string): { ok: true; url: string } | { ok: false } {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -447,6 +467,39 @@ function normalizeRelayUrl(value: string): { ok: true; url: string } | { ok: fal
   return { ok: true, url: trimmed };
 }
 
+function normalizeRelayStreamKey(value: string): string {
+  return value.trim();
+}
+
+function normalizeRecordingSettings(input: {
+  recordingEnabled?: boolean;
+  recordingSegmentSeconds?: number;
+  recordingBudgetMb?: number;
+}): {
+  ok: true;
+  recordingEnabled: boolean;
+  recordingSegmentSeconds: number;
+  recordingBudgetMb: number;
+} | { ok: false; error: string } {
+  const recordingEnabled = input.recordingEnabled === true;
+  const recordingSegmentSeconds = Number(input.recordingSegmentSeconds ?? 300);
+  const recordingBudgetMb = Number(input.recordingBudgetMb ?? 2048);
+
+  if (!Number.isFinite(recordingSegmentSeconds) || recordingSegmentSeconds < 30 || recordingSegmentSeconds > 3600) {
+    return { ok: false, error: "录制分片时长需在 30-3600 秒之间" };
+  }
+  if (!Number.isFinite(recordingBudgetMb) || recordingBudgetMb < 100 || recordingBudgetMb > 1024 * 1024) {
+    return { ok: false, error: "录制空间预算需在 100MB-1TB 之间" };
+  }
+
+  return {
+    ok: true,
+    recordingEnabled,
+    recordingSegmentSeconds: Math.trunc(recordingSegmentSeconds),
+    recordingBudgetMb: Math.trunc(recordingBudgetMb),
+  };
+}
+
 app.post("/api/admin/channels", async (request, reply) => {
   const body = request.body as {
     slug?: string;
@@ -454,6 +507,10 @@ app.post("/api/admin/channels", async (request, reply) => {
     publishPassword?: string;
     viewerPassword?: string;
     relayUrl?: string;
+    relayStreamKey?: string;
+    recordingEnabled?: boolean;
+    recordingSegmentSeconds?: number;
+    recordingBudgetMb?: number;
     enabled?: boolean;
   };
 
@@ -463,6 +520,8 @@ app.post("/api/admin/channels", async (request, reply) => {
   const viewerPassword = body?.viewerPassword ?? "";
   const enabled = body?.enabled !== false;
   const relay = normalizeRelayUrl(body?.relayUrl ?? "");
+  const relayStreamKey = normalizeRelayStreamKey(body?.relayStreamKey ?? "");
+  const recording = normalizeRecordingSettings(body ?? {});
 
   if (!validateSlug(slug)) {
     return reply.code(400).send({ error: "slug 需为 3-32 位小写字母、数字或 -" });
@@ -476,6 +535,12 @@ app.post("/api/admin/channels", async (request, reply) => {
   if (!relay.ok) {
     return reply.code(400).send({ error: "转推地址需以 rtmp:// 或 rtmps:// 开头" });
   }
+  if (!relay.url && relayStreamKey) {
+    return reply.code(400).send({ error: "设置转推推流码前请先填写转推地址" });
+  }
+  if (!recording.ok) {
+    return reply.code(400).send({ error: recording.error });
+  }
 
   try {
     const channel = db.createChannel({
@@ -484,6 +549,10 @@ app.post("/api/admin/channels", async (request, reply) => {
       publishPassword,
       viewerPassword,
       relayUrl: relay.url,
+      relayStreamKey,
+      recordingEnabled: recording.recordingEnabled,
+      recordingSegmentSeconds: recording.recordingSegmentSeconds,
+      recordingBudgetMb: recording.recordingBudgetMb,
       enabled,
     });
     return reply.code(201).send(channel);
@@ -501,6 +570,10 @@ app.patch("/api/admin/channels/:id", async (request, reply) => {
     publishPassword?: string;
     viewerPassword?: string;
     relayUrl?: string;
+    relayStreamKey?: string;
+    recordingEnabled?: boolean;
+    recordingSegmentSeconds?: number;
+    recordingBudgetMb?: number;
   };
 
   const input: {
@@ -509,6 +582,10 @@ app.patch("/api/admin/channels/:id", async (request, reply) => {
     publishPassword?: string;
     viewerPassword?: string;
     relayUrl?: string;
+    relayStreamKey?: string;
+    recordingEnabled?: boolean;
+    recordingSegmentSeconds?: number;
+    recordingBudgetMb?: number;
   } = {};
 
   if (body.slug !== undefined) {
@@ -537,12 +614,44 @@ app.patch("/api/admin/channels/:id", async (request, reply) => {
     }
     input.viewerPassword = body.viewerPassword;
   }
-  if (body.relayUrl !== undefined) {
-    const relay = normalizeRelayUrl(body.relayUrl);
+  if (body.relayUrl !== undefined || body.relayStreamKey !== undefined) {
+    const current = db.getChannelById(channelId);
+    if (!current) {
+      return reply.code(404).send({ error: "渠道不存在" });
+    }
+    const relay = normalizeRelayUrl(body.relayUrl ?? current.relayUrl);
+    const relayStreamKey = normalizeRelayStreamKey(
+      body.relayStreamKey ?? current.relayStreamKey,
+    );
     if (!relay.ok) {
       return reply.code(400).send({ error: "转推地址需以 rtmp:// 或 rtmps:// 开头" });
     }
+    if (!relay.url && relayStreamKey) {
+      return reply.code(400).send({ error: "设置转推推流码前请先填写转推地址" });
+    }
     input.relayUrl = relay.url;
+    input.relayStreamKey = relayStreamKey;
+  }
+  if (
+    body.recordingEnabled !== undefined ||
+    body.recordingSegmentSeconds !== undefined ||
+    body.recordingBudgetMb !== undefined
+  ) {
+    const current = db.getChannelById(channelId);
+    if (!current) {
+      return reply.code(404).send({ error: "渠道不存在" });
+    }
+    const recording = normalizeRecordingSettings({
+      recordingEnabled: body.recordingEnabled ?? current.recordingEnabled,
+      recordingSegmentSeconds: body.recordingSegmentSeconds ?? current.recordingSegmentSeconds,
+      recordingBudgetMb: body.recordingBudgetMb ?? current.recordingBudgetMb,
+    });
+    if (!recording.ok) {
+      return reply.code(400).send({ error: recording.error });
+    }
+    input.recordingEnabled = recording.recordingEnabled;
+    input.recordingSegmentSeconds = recording.recordingSegmentSeconds;
+    input.recordingBudgetMb = recording.recordingBudgetMb;
   }
 
   try {
@@ -565,6 +674,7 @@ app.patch("/api/admin/channels/:id", async (request, reply) => {
       }
     }
     // 立即同步一次:改了转推目标能尽快按新地址起/停,不用等下一轮定时轮询。
+    // 录制配置变化也在这里生效:分片时长/预算变更会重启对应录制进程。
     void syncTranscoders();
     return after;
   } catch (error) {
@@ -614,12 +724,84 @@ app.delete("/api/admin/channels/:id", async (request, reply) => {
   }
   disconnectViewerSockets(channel.slug);
   stopTranscodersForSlug(channel.slug);
+  recorderManager.removeChannelRecordings(channel.slug);
   try {
     await media.kickChannelPublishers(channel.slug);
   } catch (error) {
     request.log.error(error, "failed to kick publishers on delete");
   }
   return { ok: true };
+});
+
+app.get("/api/admin/recordings", async () => recordingLibrary.list());
+
+app.patch("/api/admin/recordings/:id", async (request, reply) => {
+  const id = decodeURIComponent((request.params as { id: string }).id);
+  const asset = recordingLibrary.patch(id, request.body as {
+    title?: string;
+    note?: string;
+    marked?: boolean;
+    inPointSec?: number | null;
+    outPointSec?: number | null;
+  });
+  if (!asset) {
+    return reply.code(404).send({ error: "录制文件不存在" });
+  }
+  return asset;
+});
+
+app.delete("/api/admin/recordings/:id", async (request, reply) => {
+  const id = decodeURIComponent((request.params as { id: string }).id);
+  if (!recordingLibrary.delete(id)) {
+    return reply.code(404).send({ error: "录制文件不存在" });
+  }
+  return { ok: true };
+});
+
+app.post("/api/admin/recordings/export", async (request, reply) => {
+  const body = request.body as {
+    sourceIds?: string[];
+    startSec?: number;
+    endSec?: number;
+    title?: string;
+  };
+  try {
+    return await recordingLibrary.exportClip({
+      sourceIds: Array.isArray(body.sourceIds) ? body.sourceIds : [],
+      startSec: Number(body.startSec),
+      endSec: Number(body.endSec),
+      title: body.title,
+    });
+  } catch (error) {
+    request.log.warn(error, "recording export failed");
+    return reply.code(400).send({ error: error instanceof Error ? error.message : "导出失败" });
+  }
+});
+
+app.route({
+  method: ["GET", "HEAD"],
+  url: "/api/admin/recordings/:id/media",
+  handler: async (request, reply) => {
+    const id = decodeURIComponent((request.params as { id: string }).id);
+    const sent = recordingLibrary.sendFile(reply, id, request.headers.range, false);
+    if (!sent) {
+      return reply.code(404).send({ error: "录制文件不存在" });
+    }
+    return sent;
+  },
+});
+
+app.route({
+  method: ["GET", "HEAD"],
+  url: "/api/admin/recordings/:id/download",
+  handler: async (request, reply) => {
+    const id = decodeURIComponent((request.params as { id: string }).id);
+    const sent = recordingLibrary.sendFile(reply, id, request.headers.range, true);
+    if (!sent) {
+      return reply.code(404).send({ error: "录制文件不存在" });
+    }
+    return sent;
+  },
 });
 
 app.post("/api/public/channels/:slug/access", async (request, reply) => {
@@ -968,6 +1150,7 @@ async function start(): Promise<void> {
       manager.stopAll();
     }
     relayManager.stopAll();
+    recorderManager.stopAll();
   };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);

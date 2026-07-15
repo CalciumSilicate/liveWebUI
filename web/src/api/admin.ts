@@ -16,6 +16,10 @@ export interface AdminChannel {
   publishPassword: string
   viewerPassword: string
   relayUrl: string
+  relayStreamKey: string
+  recordingEnabled: boolean
+  recordingSegmentSeconds: number
+  recordingBudgetMb: number
   authVersion: number
   createdAt: number
   updatedAt: number
@@ -31,6 +35,22 @@ export interface AdminChannel {
   webrtcReaders: number
   relayConfigured: boolean
   relaying: boolean
+  recording: {
+    enabled: boolean
+    active: boolean
+    segmentSeconds: number
+    budgetMb: number
+    usedBytes: number
+    budgetBytes: number
+    fileCount: number
+    directory: string
+    latestFile: {
+      name: string
+      path: string
+      sizeBytes: number
+      mtimeMs: number
+    } | null
+  }
 }
 
 export interface ChannelCreateInput {
@@ -39,6 +59,10 @@ export interface ChannelCreateInput {
   publishPassword: string
   viewerPassword: string
   relayUrl: string
+  relayStreamKey: string
+  recordingEnabled: boolean
+  recordingSegmentSeconds: number
+  recordingBudgetMb: number
   enabled: boolean
 }
 
@@ -48,6 +72,46 @@ export interface ChannelUpdateInput {
   publishPassword?: string
   viewerPassword?: string
   relayUrl?: string
+  relayStreamKey?: string
+  recordingEnabled?: boolean
+  recordingSegmentSeconds?: number
+  recordingBudgetMb?: number
+}
+
+export interface RecordingAsset {
+  id: string
+  channelSlug: string
+  kind: 'segment' | 'export'
+  name: string
+  title: string
+  note: string
+  marked: boolean
+  inPointSec: number | null
+  outPointSec: number | null
+  sizeBytes: number
+  mtimeMs: number
+  createdAtMs: number
+  url: string
+  downloadUrl: string
+}
+
+export interface RecordingLibrarySnapshot {
+  channels: Array<{
+    slug: string
+    segmentCount: number
+    exportCount: number
+    usedBytes: number
+    latestFile: RecordingAsset | null
+  }>
+  assets: RecordingAsset[]
+}
+
+export interface RecordingAssetPatch {
+  title?: string
+  note?: string
+  marked?: boolean
+  inPointSec?: number | null
+  outPointSec?: number | null
 }
 
 export async function getAdminSession(): Promise<boolean> {
@@ -93,4 +157,33 @@ export function setChannelEnabled(id: number, enabled: boolean): Promise<AdminCh
 
 export function deleteChannel(id: number): Promise<{ ok: boolean }> {
   return apiRequest<{ ok: boolean }>(`/admin/channels/${id}`, { method: 'DELETE' })
+}
+
+export function listRecordings(): Promise<RecordingLibrarySnapshot> {
+  return apiRequest<RecordingLibrarySnapshot>('/admin/recordings')
+}
+
+export function updateRecording(id: string, input: RecordingAssetPatch): Promise<RecordingAsset> {
+  return apiRequest<RecordingAsset>(`/admin/recordings/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
+export function deleteRecording(id: string): Promise<{ ok: boolean }> {
+  return apiRequest<{ ok: boolean }>(`/admin/recordings/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function exportRecordingClip(input: {
+  sourceIds: string[]
+  startSec: number
+  endSec: number
+  title?: string
+}): Promise<RecordingAsset> {
+  return apiRequest<RecordingAsset>('/admin/recordings/export', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
 }

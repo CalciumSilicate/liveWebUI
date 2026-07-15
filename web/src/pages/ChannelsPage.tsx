@@ -106,6 +106,10 @@ export default function ChannelsPage({ onUnauthorized }: ChannelsPageProps) {
       publishPassword: values.publishPassword,
       viewerPassword: values.viewerPassword,
       relayUrl: values.relayUrl,
+      relayStreamKey: values.relayStreamKey,
+      recordingEnabled: values.recordingEnabled,
+      recordingSegmentSeconds: values.recordingSegmentSeconds,
+      recordingBudgetMb: values.recordingBudgetMb,
     })
     setDialog(null)
     showToast('success', '渠道已更新')

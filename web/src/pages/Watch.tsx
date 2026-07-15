@@ -14,6 +14,7 @@ import {
   type ViewerMode,
 } from '@/api/watch'
 import { PageLoader } from '@/components/PageLoader'
+import { VideoPlayer } from '@/components/VideoPlayer'
 import { ThemeToggleButton } from '@/components/theme'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -321,11 +322,9 @@ export default function Watch() {
             {/* 播放区 */}
             <div className="flex flex-col gap-3 lg:min-h-0 lg:overflow-y-auto">
               <div className="relative aspect-video overflow-hidden rounded-xl border bg-black shadow-sm">
-                <video
+                <VideoPlayer
                   ref={videoRef}
-                  className="h-full w-full bg-black"
-                  controls
-                  playsInline
+                  className="h-full w-full"
                   muted
                   autoPlay
                   preload="metadata"

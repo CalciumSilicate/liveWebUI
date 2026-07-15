@@ -1,15 +1,18 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
-import { LogOut, Radio } from 'lucide-react'
+import { FolderOpen, LogOut, Radio, Video } from 'lucide-react'
 
 import { adminLogout, getAdminSession } from '@/api/admin'
 import { PageLoader } from '@/components/PageLoader'
 import { ThemeToggleButton } from '@/components/theme'
 import { Button } from '@/components/ui/button'
+import { PageSubnav, PageSubnavButton } from '@/components/layout/PageScaffold'
 import { BRAND_NAME } from '@/config'
 
 import Login from '@/pages/Login'
 
 const ChannelsPage = lazy(() => import('@/pages/ChannelsPage'))
+const RecordingsPage = lazy(() => import('@/pages/RecordingsPage'))
+type AdminPage = 'channels' | 'recordings'
 
 /**
  * 管理台:一层「鉴权门」+ 顶栏外壳。
@@ -20,6 +23,7 @@ const ChannelsPage = lazy(() => import('@/pages/ChannelsPage'))
 export default function AdminApp() {
   const [checking, setChecking] = useState(true)
   const [authenticated, setAuthenticated] = useState(false)
+  const [page, setPage] = useState<AdminPage>('channels')
 
   useEffect(() => {
     document.title = `管理台 · ${BRAND_NAME}`
@@ -72,8 +76,26 @@ export default function AdminApp() {
       </header>
 
       <main className="flex-1 p-4 md:p-6">
+        <PageSubnav className="mx-auto mb-5 max-w-7xl">
+          <PageSubnavButton active={page === 'channels'} onClick={() => setPage('channels')}>
+            <Radio className="mr-1.5 inline h-3.5 w-3.5" />
+            渠道
+          </PageSubnavButton>
+          <PageSubnavButton active={page === 'recordings'} onClick={() => setPage('recordings')}>
+            <Video className="mr-1.5 inline h-3.5 w-3.5" />
+            录制
+          </PageSubnavButton>
+          <span className="ml-auto hidden items-center gap-1 text-xs text-muted-foreground md:flex">
+            <FolderOpen className="h-3.5 w-3.5" />
+            本地文件库
+          </span>
+        </PageSubnav>
         <Suspense fallback={<PageLoader />}>
-          <ChannelsPage onUnauthorized={handleUnauthorized} />
+          {page === 'channels' ? (
+            <ChannelsPage onUnauthorized={handleUnauthorized} />
+          ) : (
+            <RecordingsPage onUnauthorized={handleUnauthorized} />
+          )}
         </Suspense>
       </main>
     </div>

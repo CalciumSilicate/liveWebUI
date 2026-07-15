@@ -6,6 +6,10 @@ export type ChannelRecord = {
   publishPassword: string;
   viewerPassword: string;
   relayUrl: string;
+  relayStreamKey: string;
+  recordingEnabled: number;
+  recordingSegmentSeconds: number;
+  recordingBudgetMb: number;
   authVersion: number;
   createdAt: number;
   updatedAt: number;
@@ -18,8 +22,14 @@ export type Channel = {
   enabled: boolean;
   publishPassword: string;
   viewerPassword: string;
-  // 转推目标 RTMP 完整地址(含推流码);空字符串表示不转推。
+  // 转推服务器地址;空字符串表示不转推。旧数据可能仍包含完整推流地址。
   relayUrl: string;
+  // 平台提供的转推推流码;运行时与 relayUrl 组合。
+  relayStreamKey: string;
+  // 自动录制配置:源流在线时按分片写入本地 recordings 目录,并按预算滚动清理。
+  recordingEnabled: boolean;
+  recordingSegmentSeconds: number;
+  recordingBudgetMb: number;
   authVersion: number;
   createdAt: number;
   updatedAt: number;
@@ -31,6 +41,10 @@ export type ChannelUpdateInput = {
   publishPassword?: string;
   viewerPassword?: string;
   relayUrl?: string;
+  relayStreamKey?: string;
+  recordingEnabled?: boolean;
+  recordingSegmentSeconds?: number;
+  recordingBudgetMb?: number;
 };
 
 export type CommentRecord = {
@@ -79,4 +93,23 @@ export type ChannelRuntime = {
   sourceOnline: boolean;
   playbackOnline: boolean;
   readers: number;
+};
+
+export type RecordingFile = {
+  name: string;
+  path: string;
+  sizeBytes: number;
+  mtimeMs: number;
+};
+
+export type RecordingStats = {
+  enabled: boolean;
+  active: boolean;
+  segmentSeconds: number;
+  budgetMb: number;
+  usedBytes: number;
+  budgetBytes: number;
+  fileCount: number;
+  directory: string;
+  latestFile: RecordingFile | null;
 };

@@ -68,6 +68,21 @@ function buildRelayArgs(inputUrl: string, outputUrl: string): string[] {
   ];
 }
 
+export function buildRelayTargetUrl(relayUrl: string, streamKey: string): string {
+  const base = relayUrl.trim();
+  const key = streamKey.trim();
+  if (!base || !key) {
+    return base;
+  }
+  if (base.endsWith("/") && key.startsWith("/")) {
+    return `${base}${key.slice(1)}`;
+  }
+  if (base.endsWith("/") || key.startsWith("/") || key.startsWith("?") || key.startsWith("#")) {
+    return `${base}${key}`;
+  }
+  return `${base}/${key}`;
+}
+
 export class RelayManager {
   private readonly processes = new Map<string, ManagedProcess>();
   private readonly backoff = new Map<string, BackoffState>();
@@ -86,7 +101,7 @@ export class RelayManager {
     // 期望在转推的渠道:已启用、配了目标地址、且源在线。
     const desired = new Map<string, string>();
     for (const channel of channels) {
-      const relayUrl = channel.relayUrl.trim();
+      const relayUrl = buildRelayTargetUrl(channel.relayUrl, channel.relayStreamKey);
       const sourceOnline = pathMap.get(channel.slug)?.online ?? false;
       if (channel.enabled && relayUrl && sourceOnline) {
         desired.set(channel.slug, relayUrl);

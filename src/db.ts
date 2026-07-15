@@ -14,6 +14,7 @@ function mapChannel(record: ChannelRecord): Channel {
   return {
     ...record,
     enabled: record.enabled === 1,
+    recordingEnabled: record.recordingEnabled === 1,
   };
 }
 
@@ -38,6 +39,10 @@ export class AppDatabase {
         publishPassword TEXT NOT NULL,
         viewerPassword TEXT NOT NULL,
         relayUrl TEXT NOT NULL DEFAULT '',
+        relayStreamKey TEXT NOT NULL DEFAULT '',
+        recordingEnabled INTEGER NOT NULL DEFAULT 0,
+        recordingSegmentSeconds INTEGER NOT NULL DEFAULT 300,
+        recordingBudgetMb INTEGER NOT NULL DEFAULT 2048,
         authVersion INTEGER NOT NULL DEFAULT 1,
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL
@@ -56,13 +61,26 @@ export class AppDatabase {
       ON comments(channelId, createdAt DESC);
     `);
 
-    // 迁移:为早于「转推」功能创建的旧库补上 relayUrl 列。
-    const hasRelayUrl = this.db
+    const channelColumns = this.db
       .prepare<[], { name: string }>("PRAGMA table_info(channels)")
-      .all()
-      .some((column) => column.name === "relayUrl");
-    if (!hasRelayUrl) {
+      .all();
+    const hasColumn = (name: string) => channelColumns.some((column) => column.name === name);
+
+    // 迁移:为早于「转推」功能创建的旧库补上 relayUrl 列。
+    if (!hasColumn("relayUrl")) {
       this.db.exec("ALTER TABLE channels ADD COLUMN relayUrl TEXT NOT NULL DEFAULT ''");
+    }
+    if (!hasColumn("relayStreamKey")) {
+      this.db.exec("ALTER TABLE channels ADD COLUMN relayStreamKey TEXT NOT NULL DEFAULT ''");
+    }
+    if (!hasColumn("recordingEnabled")) {
+      this.db.exec("ALTER TABLE channels ADD COLUMN recordingEnabled INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!hasColumn("recordingSegmentSeconds")) {
+      this.db.exec("ALTER TABLE channels ADD COLUMN recordingSegmentSeconds INTEGER NOT NULL DEFAULT 300");
+    }
+    if (!hasColumn("recordingBudgetMb")) {
+      this.db.exec("ALTER TABLE channels ADD COLUMN recordingBudgetMb INTEGER NOT NULL DEFAULT 2048");
     }
   }
 
@@ -91,14 +109,24 @@ export class AppDatabase {
     publishPassword: string;
     viewerPassword: string;
     relayUrl: string;
+    relayStreamKey: string;
+    recordingEnabled: boolean;
+    recordingSegmentSeconds: number;
+    recordingBudgetMb: number;
     enabled: boolean;
   }): Channel {
     const timestamp = now();
     const stmt = this.db.prepare(`
       INSERT INTO channels (
-        slug, label, enabled, publishPassword, viewerPassword, relayUrl, authVersion, createdAt, updatedAt
+        slug, label, enabled, publishPassword, viewerPassword, relayUrl, relayStreamKey,
+        recordingEnabled, recordingSegmentSeconds, recordingBudgetMb,
+        authVersion, createdAt, updatedAt
       )
-      VALUES (@slug, @label, @enabled, @publishPassword, @viewerPassword, @relayUrl, @authVersion, @createdAt, @updatedAt)
+      VALUES (
+        @slug, @label, @enabled, @publishPassword, @viewerPassword, @relayUrl, @relayStreamKey,
+        @recordingEnabled, @recordingSegmentSeconds, @recordingBudgetMb,
+        @authVersion, @createdAt, @updatedAt
+      )
     `);
     const info = stmt.run({
       slug: normalizeSlug(input.slug),
@@ -107,6 +135,10 @@ export class AppDatabase {
       publishPassword: input.publishPassword,
       viewerPassword: input.viewerPassword,
       relayUrl: input.relayUrl,
+      relayStreamKey: input.relayStreamKey,
+      recordingEnabled: input.recordingEnabled ? 1 : 0,
+      recordingSegmentSeconds: input.recordingSegmentSeconds,
+      recordingBudgetMb: input.recordingBudgetMb,
       authVersion: 1,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -132,6 +164,16 @@ export class AppDatabase {
     const viewerPassword =
       input.viewerPassword !== undefined ? input.viewerPassword : before.viewerPassword;
     const relayUrl = input.relayUrl !== undefined ? input.relayUrl : before.relayUrl;
+    const relayStreamKey =
+      input.relayStreamKey !== undefined ? input.relayStreamKey : before.relayStreamKey;
+    const recordingEnabled =
+      input.recordingEnabled !== undefined ? input.recordingEnabled : before.recordingEnabled;
+    const recordingSegmentSeconds =
+      input.recordingSegmentSeconds !== undefined
+        ? input.recordingSegmentSeconds
+        : before.recordingSegmentSeconds;
+    const recordingBudgetMb =
+      input.recordingBudgetMb !== undefined ? input.recordingBudgetMb : before.recordingBudgetMb;
     const authVersion =
       slug !== before.slug || viewerPassword !== before.viewerPassword
         ? before.authVersion + 1
@@ -145,6 +187,10 @@ export class AppDatabase {
             publishPassword = @publishPassword,
             viewerPassword = @viewerPassword,
             relayUrl = @relayUrl,
+            relayStreamKey = @relayStreamKey,
+            recordingEnabled = @recordingEnabled,
+            recordingSegmentSeconds = @recordingSegmentSeconds,
+            recordingBudgetMb = @recordingBudgetMb,
             authVersion = @authVersion,
             updatedAt = @updatedAt
         WHERE id = @id
@@ -156,6 +202,10 @@ export class AppDatabase {
         publishPassword,
         viewerPassword,
         relayUrl,
+        relayStreamKey,
+        recordingEnabled: recordingEnabled ? 1 : 0,
+        recordingSegmentSeconds,
+        recordingBudgetMb,
         authVersion,
         updatedAt: now(),
       });

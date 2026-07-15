@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { Check, Copy, Pencil, Radio, Trash2, Users } from 'lucide-react'
+import { Check, Copy, HardDrive, Pencil, Radio, Trash2, Users, Video } from 'lucide-react'
 
 import type { AdminChannel } from '@/api/admin'
 import { Badge } from '@/components/ui/badge'
@@ -57,6 +57,13 @@ function FlagBadge({ online, children }: { online: boolean; children: ReactNode 
       {children}
     </Badge>
   )
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB'
+  const mb = bytes / 1024 / 1024
+  if (mb < 1024) return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`
+  return `${(mb / 1024).toFixed(1)} GB`
 }
 
 interface ChannelCardProps {
@@ -126,12 +133,39 @@ export function ChannelCard({ channel, busy, onEdit, onToggle, onDelete }: Chann
             {channel.relaying ? '转推中' : '转推待命'}
           </Badge>
         ) : null}
+        {channel.recording.enabled ? (
+          <Badge
+            variant="outline"
+            className={cn(
+              'gap-1 text-[11px] font-medium',
+              channel.recording.active
+                ? 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300'
+                : 'text-muted-foreground',
+            )}
+          >
+            <Video className="h-3 w-3" />
+            {channel.recording.active ? '录制中' : '录制待命'}
+          </Badge>
+        ) : null}
       </div>
 
       <div className="grid gap-3">
         <CopyLine label="推流地址" value={channel.pushUrl} />
         <CopyLine label="观看地址" value={channel.watchUrl} />
-        {channel.relayConfigured ? <CopyLine label="转推目标" value={channel.relayUrl} /> : null}
+        {channel.relayConfigured ? <CopyLine label="转推地址" value={channel.relayUrl} /> : null}
+        {channel.relayStreamKey ? <CopyLine label="转推码" value={channel.relayStreamKey} /> : null}
+        {channel.recording.enabled ? (
+          <div className="rounded-lg border bg-muted/20 px-2.5 py-2 text-xs text-muted-foreground">
+            <div className="mb-1 flex items-center gap-1.5 font-medium text-foreground/80">
+              <HardDrive className="h-3.5 w-3.5" />
+              录制: {formatBytes(channel.recording.usedBytes)} / {formatBytes(channel.recording.budgetBytes)}
+            </div>
+            <div className="truncate">
+              {channel.recording.fileCount} 个分片 · 每 {channel.recording.segmentSeconds} 秒 ·{' '}
+              {channel.recording.latestFile ? channel.recording.latestFile.name : '暂无文件'}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <div className="mt-auto flex items-center justify-between gap-2 border-t pt-3">

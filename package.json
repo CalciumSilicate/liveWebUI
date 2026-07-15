@@ -8,8 +8,13 @@
     "build:web": "npm --prefix web ci && npm --prefix web run build",
     "build:all": "npm run build:web && npm run build",
     "start": "node dist/server.js",
-    "dev": "tsx watch src/server.ts",
-    "dev:web": "npm --prefix web run dev"
+    "dev": "uv run scripts/dev.py",
+    "dev:web": "npm --prefix web run dev",
+    "dev:ffmpeg": "powershell -ExecutionPolicy Bypass -File scripts/fetch-ffmpeg.ps1",
+    "dev:media": "powershell -ExecutionPolicy Bypass -File scripts/start-mediamtx.ps1 -FetchIfMissing",
+    "dev:local": "uv run scripts/dev.py",
+    "dev:backend": "tsx watch src/server.ts",
+    "dev:ps": "powershell -ExecutionPolicy Bypass -File scripts/start-dev.ps1"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

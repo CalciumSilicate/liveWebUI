@@ -15,6 +15,7 @@ services:
       MEDIA_RTSP_ORIGIN: rtsp://mediamtx:8554
       DB_PATH: /app/data/app.db
       FFMPEG_BIN: /usr/bin/ffmpeg
+      RECORDINGS_DIR: /app/data/recordings
       PUBLIC_WEBRTC_PORT: 42113
     ports:
       - "42110:42110"

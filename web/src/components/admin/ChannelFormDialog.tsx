@@ -20,6 +20,10 @@ export interface ChannelFormValues {
   publishPassword: string
   viewerPassword: string
   relayUrl: string
+  relayStreamKey: string
+  recordingEnabled: boolean
+  recordingSegmentSeconds: number
+  recordingBudgetMb: number
   enabled: boolean
 }
 
@@ -29,6 +33,10 @@ const EMPTY: ChannelFormValues = {
   publishPassword: '',
   viewerPassword: '',
   relayUrl: '',
+  relayStreamKey: '',
+  recordingEnabled: false,
+  recordingSegmentSeconds: 300,
+  recordingBudgetMb: 2048,
   enabled: true,
 }
 
@@ -77,6 +85,9 @@ export function ChannelFormDialog({
         slug: values.slug.trim().toLowerCase(),
         label: values.label.trim(),
         relayUrl: values.relayUrl.trim(),
+        relayStreamKey: values.relayStreamKey.trim(),
+        recordingSegmentSeconds: Number(values.recordingSegmentSeconds),
+        recordingBudgetMb: Number(values.recordingBudgetMb),
       })
     } catch (err) {
       setError(err instanceof Error ? err.message : '操作失败')
@@ -137,17 +148,69 @@ export function ChannelFormDialog({
                 />
               </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="channel-relay">转推目标 RTMP(可选)</Label>
-              <Input
-                id="channel-relay"
-                value={values.relayUrl}
-                onChange={(e) => patch({ relayUrl: e.target.value })}
-                placeholder="rtmp://目标服务器/app/串流码"
-              />
+            <div className="space-y-4 rounded-lg border bg-muted/20 p-3">
+              <div className="space-y-2">
+                <Label htmlFor="channel-relay">转推服务器地址(可选)</Label>
+                <Input
+                  id="channel-relay"
+                  value={values.relayUrl}
+                  onChange={(e) => patch({ relayUrl: e.target.value })}
+                  placeholder="rtmp://目标服务器/app"
+                  maxLength={2048}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="channel-relay-key">转推推流码(Stream Key)</Label>
+                <Input
+                  id="channel-relay-key"
+                  value={values.relayStreamKey}
+                  onChange={(e) => patch({ relayStreamKey: e.target.value })}
+                  placeholder="例如:livehime"
+                  maxLength={2048}
+                />
+              </div>
               <p className="text-xs text-muted-foreground">
-                填写后,本平台会把该直播间的流原样转推到此地址(如 B 站 / 抖音 / YouTube);留空则不转推。
+                分别填写平台提供的服务器地址和推流码;两者都留空则不转推。
               </p>
+            </div>
+            <div className="space-y-3 rounded-lg border bg-muted/20 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <Label htmlFor="channel-recording">自动录制</Label>
+                  <p className="text-xs text-muted-foreground">
+                    源流在线时自动保存 MP4 分片,超出预算后删除最旧文件。
+                  </p>
+                </div>
+                <Switch
+                  id="channel-recording"
+                  checked={values.recordingEnabled}
+                  onCheckedChange={(checked) => patch({ recordingEnabled: checked })}
+                />
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="channel-recording-segment">分片时长(秒)</Label>
+                  <Input
+                    id="channel-recording-segment"
+                    type="number"
+                    min={30}
+                    max={3600}
+                    value={values.recordingSegmentSeconds}
+                    onChange={(e) => patch({ recordingSegmentSeconds: Number(e.target.value) })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="channel-recording-budget">空间预算(MB)</Label>
+                  <Input
+                    id="channel-recording-budget"
+                    type="number"
+                    min={100}
+                    max={1048576}
+                    value={values.recordingBudgetMb}
+                    onChange={(e) => patch({ recordingBudgetMb: Number(e.target.value) })}
+                  />
+                </div>
+              </div>
             </div>
             {mode === 'create' ? (
               <div className="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2.5">
